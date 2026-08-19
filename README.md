@@ -44,15 +44,17 @@ To use Docker later, install [Docker Desktop](https://www.docker.com/products/do
 
 ## Host online (Render)
 
-The repo is set up for [Render](https://render.com):
+Render now charges for Postgres and Redis. This repo deploys as **one web service** (SQLite + in-memory presence) so you do not need to buy a database.
 
-1. Push this project to GitHub (already the intended remote).
-2. On Render: **New → Blueprint** and select `Yuvrajbhagyedh/Realtime-chat-app`.
-3. Render reads `render.yaml`, builds the Docker image, and attaches Postgres + Redis.
+If a card is still required, that is Render’s Hobby account check. You can skip adding Postgres / Key Value.
 
-After deploy, open the `relay-web` URL, register two accounts, and chat.
+1. **+ New → Web Service** (or Blueprint; it only creates `relay-web` now).
+2. Connect **Yuvrajbhagyedh/Realtime-chat-app**, branch **main**.
+3. Runtime: **Docker**. Dockerfile path: `./Dockerfile`.
+4. Do **not** create Postgres or Key Value.
+5. Wait until the service is **Live**, then open the `.onrender.com` URL.
 
-You can also deploy the root `Dockerfile` on Railway, Fly.io, or any Docker host. Set `DATABASE_URL`, `REDIS_URL`, and `SECRET_KEY`. Hosted Postgres URLs (`postgres://...`) are converted to async SQLAlchemy automatically.
+Chat data can reset when Render restarts the free/hobby instance. For a permanent database you would add paid Postgres later.
 
 ## Run with Docker
 

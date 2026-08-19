@@ -1,13 +1,4 @@
-databases:
-  - name: relay-db
-    plan: free
-
 services:
-  - type: redis
-    name: relay-redis
-    plan: free
-    ipAllowList: []
-
   - type: web
     name: relay-web
     runtime: docker
@@ -15,14 +6,9 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: relay-db
-          property: connectionString
+        value: sqlite+aiosqlite:////app/chat.db
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: relay-redis
-          property: connectionString
+        value: memory://
       - key: SECRET_KEY
         generateValue: true
       - key: FRONTEND_DIST
