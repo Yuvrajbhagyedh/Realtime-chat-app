@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,7 +15,12 @@ from app.routers import auth, conversations, messages, users
 from app.ws import router as ws_router
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FRONTEND_DIST = Path(settings.frontend_dist) if settings.frontend_dist else REPO_ROOT / "frontend" / "dist"
+
+
+def frontend_dir() -> Path:
+    if settings.frontend_dist:
+        return Path(settings.frontend_dist)
+    return REPO_ROOT / "frontend" / "dist"
 
 
 @asynccontextmanager
@@ -56,14 +61,25 @@ async def health():
     return {"status": "ok"}
 
 
-if FRONTEND_DIST.exists():
-    assets = FRONTEND_DIST / "assets"
-    if assets.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="frontend-assets")
+@app.api_route("/", methods=["GET", "HEAD"])
+async def spa_root():
+    index = frontend_dir() / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=500, detail="Frontend build is missing")
+    return FileResponse(index)
 
-    @app.get("/{full_path:path}")
-    async def spa(full_path: str):
-        candidate = FRONTEND_DIST / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST / "index.html")
+
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+async def spa(full_path: str):
+    if full_path.startswith(("api/", "ws", "uploads/", "docs", "redoc", "openapi.json")):
+        raise HTTPException(status_code=404, detail="Not found")
+    dist = frontend_dir()
+    candidate = dist / full_path
+    if candidate.is_file():
+        return FileResponse(candidate)
+    if full_path.startswith("assets/"):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    index = dist / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=500, detail="Frontend build is missing")
+    return FileResponse(index)
