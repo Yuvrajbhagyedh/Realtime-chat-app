@@ -1,0 +1,10 @@
+.venv/
+.tools/
+.git/
+node_modules/
+frontend/dist/
+backend/uploads/
+uploads/
+*.db
+__pycache__/
+.env
