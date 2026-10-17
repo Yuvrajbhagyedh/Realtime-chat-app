@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -55,6 +55,12 @@ class ConversationMember(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    # Every chat query filters by conversation, then sorts by id (history,
+    # latest message) or created_at (unread counts).
+    __table_args__ = (
+        Index("ix_messages_conversation_id_id", "conversation_id", "id"),
+        Index("ix_messages_conversation_id_created_at", "conversation_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)

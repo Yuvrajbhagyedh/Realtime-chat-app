@@ -59,6 +59,10 @@ export default function Chat() {
   const typingTimer = useRef(null);
 
   const active = conversations.find((c) => c.id === activeId) || null;
+  // Latest list for socket handlers (state updaters run later, so they can't
+  // tell us synchronously whether a chat is already loaded).
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
 
   const refreshConvos = useCallback(async () => {
     const data = await api.conversations();
@@ -82,7 +86,9 @@ export default function Chat() {
     api.messages(activeId).then((rows) => {
       if (!cancelled) setMessages(rows);
     });
-    api.markRead(activeId).then(() => refreshConvos()).catch(() => {});
+    // Clear the badge locally; the server's "read" event updates receipts.
+    api.markRead(activeId).catch(() => {});
+    setConversations((cs) => cs.map((c) => (c.id === activeId ? { ...c, unread_count: 0 } : c)));
     return () => {
       cancelled = true;
     };
@@ -107,14 +113,46 @@ export default function Chat() {
       }
       if (event.type === "message" && event.payload) {
         const msg = event.payload;
-        if (msg.conversation_id === activeId) {
+        const isActive = msg.conversation_id === activeId;
+        if (isActive) {
           setMessages((rows) => (rows.some((m) => m.id === msg.id) ? rows : [...rows, msg]));
           api.markRead(activeId).catch(() => {});
         }
-        refreshConvos();
+        // Update just this chat's preview and badge instead of reloading the
+        // whole list (which every member used to do on every message).
+        if (!conversationsRef.current.some((c) => c.id === msg.conversation_id)) {
+          refreshConvos();
+          return;
+        }
+        setConversations((cs) =>
+          cs.map((c) => {
+            if (c.id !== msg.conversation_id) return c;
+            const fromOther = msg.sender_id !== user.id;
+            return {
+              ...c,
+              last_message: msg,
+              unread_count: isActive ? 0 : c.unread_count + (fromOther ? 1 : 0),
+            };
+          })
+        );
       }
       if (event.type === "conversation.upsert") refreshConvos();
-      if (event.type === "read") refreshConvos();
+      if (event.type === "read") {
+        // Read receipts: update that member's last_read_at in place.
+        setConversations((cs) =>
+          cs.map((c) =>
+            c.id !== event.conversation_id
+              ? c
+              : {
+                  ...c,
+                  unread_count: event.user_id === user.id ? 0 : c.unread_count,
+                  members: c.members.map((m) =>
+                    m.id === event.user_id ? { ...m, last_read_at: event.last_read_at } : m
+                  ),
+                }
+          )
+        );
+      }
       if (event.type === "notification") {
         setNotifications((n) => [{ ...event, id: event.message_id, is_read: false }, ...n]);
       }

@@ -67,13 +67,12 @@ class Hub:
             else:
                 pairs = [(uid, self._sockets[uid]) for uid in targets if uid in self._sockets]
             sockets = [(uid, ws) for uid, group in pairs for ws in group]
-        stale: list[tuple[int, WebSocket]] = []
         payload = json.dumps(event, default=str)
-        for uid, ws in sockets:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                stale.append((uid, ws))
+        # Send to everyone at once so one slow connection doesn't delay the rest.
+        results = await asyncio.gather(
+            *(ws.send_text(payload) for _, ws in sockets), return_exceptions=True
+        )
+        stale = [pair for pair, result in zip(sockets, results) if isinstance(result, Exception)]
         for uid, ws in stale:
             await self.disconnect(uid, ws)
 

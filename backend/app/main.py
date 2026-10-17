@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,6 +37,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Realtime Chat", lifespan=lifespan)
+# Compresses JSON and the JS/CSS bundle (WebSocket traffic is unaffected).
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -76,6 +79,10 @@ async def spa(full_path: str):
     dist = frontend_dir()
     candidate = dist / full_path
     if candidate.is_file():
+        if full_path.startswith("assets/"):
+            # Vite puts a content hash in these file names, so browsers can
+            # keep them forever and skip re-downloading on every visit.
+            return FileResponse(candidate, headers={"Cache-Control": "public, max-age=31536000, immutable"})
         return FileResponse(candidate)
     if full_path.startswith("assets/"):
         raise HTTPException(status_code=404, detail="Asset not found")

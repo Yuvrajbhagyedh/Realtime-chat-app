@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -21,6 +22,7 @@ async def save_upload(file: UploadFile, *, images_only: bool = False) -> tuple[s
     stored = f"{uuid.uuid4().hex}{ext}"
     dest_dir = Path(settings.upload_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / stored).write_bytes(data)
+    # Off the event loop: a 10MB write would otherwise pause every chat socket.
+    await asyncio.to_thread((dest_dir / stored).write_bytes, data)
     kind = "image" if content_type in IMAGE_TYPES else "file"
     return f"/uploads/{stored}", Path(file.filename).name, kind

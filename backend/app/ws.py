@@ -42,27 +42,20 @@ async def websocket_endpoint(ws: WebSocket):
                 conversation_id = data.get("conversation_id")
                 if not isinstance(conversation_id, int):
                     continue
+                # Typing events fire on every keystroke burst: one query for
+                # the member list, and membership checked from it.
                 async with SessionLocal() as db:
-                    member = (
-                        await db.execute(
-                            select(ConversationMember).where(
-                                ConversationMember.conversation_id == conversation_id,
-                                ConversationMember.user_id == user_id,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if member is None:
-                        continue
-                    member_ids = [
-                        m.user_id
-                        for m in (
+                    member_ids = list(
+                        (
                             await db.execute(
-                                select(ConversationMember).where(
+                                select(ConversationMember.user_id).where(
                                     ConversationMember.conversation_id == conversation_id
                                 )
                             )
                         ).scalars().all()
-                    ]
+                    )
+                if user_id not in member_ids:
+                    continue
                 is_typing = bool(data.get("is_typing", True))
                 if is_typing:
                     await set_typing(conversation_id, user_id)

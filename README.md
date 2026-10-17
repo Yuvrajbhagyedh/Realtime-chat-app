@@ -26,6 +26,21 @@ React  --HTTP-->  FastAPI  --SQL-->  PostgreSQL
 
 FastAPI workers keep local sockets. Every event is published on Redis `chat:events` so other workers can deliver it. Presence keys expire unless the client heartbeats.
 
+## Performance
+
+Measured locally with 60 chats × 200 messages:
+
+| | Before | After |
+|---|---|---|
+| Load chat list | 37.5 ms, 183 SQL queries | 5 ms, 6 SQL queries |
+| Chat-list reloads per incoming message (each member) | 1–2 full reloads | 0 (updated in place) |
+
+- The conversation list is built with a fixed number of batched queries instead of 3 per chat.
+- The client updates one chat's preview, unread badge and read receipts from WebSocket events instead of re-fetching the whole list.
+- Composite indexes on `messages (conversation_id, id)` and `(conversation_id, created_at)`, added to existing databases on startup.
+- SQLite runs in WAL mode; typing events use one query; WebSocket fan-out sends to all sockets concurrently; uploads are written off the event loop.
+- Responses are gzip-compressed, and hashed `/assets/*` files are cached by browsers for a year.
+
 ## Run without Docker (this Mac)
 
 `docker` is not installed. Use the local starter instead — it builds the React UI, uses SQLite, and an in-memory presence broker:

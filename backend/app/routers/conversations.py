@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.database import get_db
 from app.deps import get_current_user, require_member
@@ -16,11 +16,57 @@ from app.schemas import ConversationOut, DirectCreate, GroupCreate, GroupMembers
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 
-async def _to_out(db: AsyncSession, conv: Conversation, current_id: int) -> ConversationOut:
-    members = conv.members
-    user_ids = [m.user_id for m in members]
+async def _to_outs(db: AsyncSession, convs: list[Conversation], current_id: int) -> list[ConversationOut]:
+    """Build list items for many conversations with a fixed number of queries.
+
+    The old per-conversation version ran 3 queries for every chat (members'
+    users, last message, unread count): 183 queries for 60 chats, and the
+    client reloads this list on every incoming message.
+    """
+    if not convs:
+        return []
+    conv_ids = [c.id for c in convs]
+    user_ids = {m.user_id for c in convs for m in c.members}
+
+    # Latest message per conversation: max(id) is the newest (ids only grow).
+    latest_ids = (
+        select(func.max(Message.id))
+        .where(Message.conversation_id.in_(conv_ids))
+        .group_by(Message.conversation_id)
+    )
+    last_messages = {
+        m.conversation_id: m
+        for m in (await db.execute(select(Message).where(Message.id.in_(latest_ids)))).scalars().all()
+    }
+    user_ids |= {m.sender_id for m in last_messages.values()}
+
     users = {u.id: u for u in (await db.execute(select(User).where(User.id.in_(user_ids)))).scalars().all()}
-    presence = await online_map(user_ids)
+    presence = await online_map(sorted(user_ids))
+
+    # Unread = messages from others newer than my last_read_at, per conversation.
+    me = aliased(ConversationMember)
+    unread_rows = await db.execute(
+        select(Message.conversation_id, func.count(Message.id))
+        .join(me, (me.conversation_id == Message.conversation_id) & (me.user_id == current_id))
+        .where(
+            Message.conversation_id.in_(conv_ids),
+            Message.sender_id != current_id,
+            or_(me.last_read_at.is_(None), Message.created_at > me.last_read_at),
+        )
+        .group_by(Message.conversation_id)
+    )
+    unread = dict(unread_rows.all())
+
+    return [_build_out(c, users, presence, last_messages.get(c.id), unread.get(c.id, 0)) for c in convs]
+
+
+def _build_out(
+    conv: Conversation,
+    users: dict[int, User],
+    presence: dict[int, bool],
+    last: Message | None,
+    unread_count: int,
+) -> ConversationOut:
     member_outs = [
         MemberOut(
             id=m.user_id,
@@ -30,15 +76,11 @@ async def _to_out(db: AsyncSession, conv: Conversation, current_id: int) -> Conv
             role=m.role,
             last_read_at=m.last_read_at,
         )
-        for m in members
+        for m in conv.members
     ]
-    last_q = await db.execute(
-        select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at.desc()).limit(1)
-    )
-    last = last_q.scalar_one_or_none()
     last_out = None
     if last:
-        sender = users.get(last.sender_id) or await db.get(User, last.sender_id)
+        sender = users.get(last.sender_id)
         last_out = MessageOut(
             id=last.id,
             conversation_id=last.conversation_id,
@@ -51,14 +93,6 @@ async def _to_out(db: AsyncSession, conv: Conversation, current_id: int) -> Conv
             file_name=last.file_name,
             created_at=last.created_at,
         )
-    my_member = next(m for m in members if m.user_id == current_id)
-    unread_q = select(func.count(Message.id)).where(
-        Message.conversation_id == conv.id,
-        Message.sender_id != current_id,
-    )
-    if my_member.last_read_at is not None:
-        unread_q = unread_q.where(Message.created_at > my_member.last_read_at)
-    unread = (await db.execute(unread_q)).scalar_one()
     return ConversationOut(
         id=conv.id,
         type=conv.type,
@@ -67,8 +101,12 @@ async def _to_out(db: AsyncSession, conv: Conversation, current_id: int) -> Conv
         created_at=conv.created_at,
         members=member_outs,
         last_message=last_out,
-        unread_count=unread,
+        unread_count=unread_count,
     )
+
+
+async def _to_out(db: AsyncSession, conv: Conversation, current_id: int) -> ConversationOut:
+    return (await _to_outs(db, [conv], current_id))[0]
 
 
 @router.get("", response_model=list[ConversationOut])
@@ -84,7 +122,7 @@ async def list_conversations(
         .order_by(Conversation.created_at.desc())
     )
     convos = result.scalars().unique().all()
-    return [await _to_out(db, c, current.id) for c in convos]
+    return await _to_outs(db, list(convos), current.id)
 
 
 @router.get("/{conversation_id}", response_model=ConversationOut)
